@@ -1,41 +1,27 @@
-version: "3.8"
+version: "3.8"  # 최신 Docker Compose 버전 사용
 
 services:
-  coral-deeplab:
-    image: pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime
-    runtime: nvidia
+  ai-training:
+    build: .  # 현재 디렉터리의 Dockerfile로 이미지 빌드
+    container_name: coral_deeplab_trainer  # 컨테이너 이름 (선택 사항)
+    
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      # CUDA 메모리 관리 최적화를 위한 환경변수 추가
-      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
-      # 컨테이너 내 시간대 설정
-      - TZ=Asia/Seoul
-
-    build:
-      context: .
-      dockerfile: Dockerfile
-
-    working_dir: /workspace
+      - NVIDIA_REQUIRE_CUDA="cuda>=11.8 brand=tesla,driver>=520,driver<521"
 
     volumes:
-      # 볼륨 마운트 경로 충돌 수정
-      - ./:/workspace/src
-      - /mnt/d/merged_all:/workspace/data
-    
-    # 리소스 제한 추가
+      - .:/workspace  # 현재 폴더를 /workspace로 마운트
+      - /mnt/d/merged_all:/mnt/d/merged_all  # 데이터셋 마운트
+
     deploy:
       resources:
-        limits:
-          memory: 16G
         reservations:
           devices:
             - driver: nvidia
-              count: 1
+              count: 4  # GPU 4개 할당
               capabilities: [gpu]
 
-    # 재시작 정책을 제거하여 무한 재시작 방지
-    restart: no
-
-    # entrypoint.sh 대신 기본 셸 실행
-    command: ["/bin/bash"]
+    # (선택) 포트 매핑 - 필요한 경우에만 활성화
+    # ports:
+    #   - "8888:8888"  # 예: Jupyter Notebook 접속용
+    #   - "6006:6006"  # 예: TensorBoard 접속용

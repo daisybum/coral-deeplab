@@ -1,35 +1,24 @@
-# Dockerfile
-FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime
+# 베이스 이미지: TensorFlow 2.19 GPU
+FROM tensorflow/tensorflow:2.12.0-gpu
 
-# 시스템 패키지 업데이트 및 필요한 의존성 설치
-RUN apt-get update && apt-get install -y \
-    git \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+# 필요 패키지 설치 (git 등)
+RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 
-# pip 업그레이드 및 캐시 제거
-RUN pip install --no-cache-dir --upgrade pip
-
-# 필수 패키지 설치 (버전 명시)
-RUN pip install --no-cache-dir \
-    tensorflow==2.12.* \
-    numpy==1.23.* \
-    pandas==2.0.* \
-    matplotlib==3.7.*
-
-# coral-deeplab 설치
-RUN pip install --no-cache-dir --no-deps git+https://github.com/xadrianzetx/coral-deeplab.git
-
-# 작업 디렉토리 설정
+# 작업 디렉터리 생성
 WORKDIR /workspace
 
-# 환경 변수 설정
-ENV PYTHONUNBUFFERED=1
+# 모델 저장소 클론
+RUN git clone https://github.com/daisybum/coral-deeplab.git
 
-# # 컨테이너 시작 시 실행할 스크립트 추가 (선택사항)
-# COPY entrypoint.sh /usr/local/bin/
-# RUN chmod +x entrypoint.sh
-# ENTRYPOINT ["/bin/bash", "/usr/local/bin/entrypoint.sh"]
+# 작업 디렉터리를 저장소로 변경
+WORKDIR /workspace/coral-deeplab
 
+# (선택) 파이썬 패키지 설치 – 저장소에 필요한 의존성 설치
+# 예: requirements.txt가 있을 경우
+# COPY requirements.txt ./ 
+# RUN pip install -r requirements.txt
+# 또는 setup.py를 통해 설치
+# RUN pip install .
 
-CMD ["/bin/bash"]
+# (선택) Jupyter/TensorBoard 등을 사용할 경우 포트 노출
+# EXPOSE 8888 6006
