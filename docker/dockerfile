@@ -1,0 +1,35 @@
+# Dockerfile
+FROM pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime
+
+# 시스템 패키지 업데이트 및 필요한 의존성 설치
+RUN apt-get update && apt-get install -y \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# pip 업그레이드 및 캐시 제거
+RUN pip install --no-cache-dir --upgrade pip
+
+# 필수 패키지 설치 (버전 명시)
+RUN pip install --no-cache-dir \
+    tensorflow==2.12.* \
+    numpy==1.23.* \
+    pandas==2.0.* \
+    matplotlib==3.7.*
+
+# coral-deeplab 설치
+RUN pip install --no-cache-dir --no-deps git+https://github.com/xadrianzetx/coral-deeplab.git
+
+# 작업 디렉토리 설정
+WORKDIR /workspace
+
+# 환경 변수 설정
+ENV PYTHONUNBUFFERED=1
+
+# # 컨테이너 시작 시 실행할 스크립트 추가 (선택사항)
+# COPY entrypoint.sh /usr/local/bin/
+# RUN chmod +x entrypoint.sh
+# ENTRYPOINT ["/bin/bash", "/usr/local/bin/entrypoint.sh"]
+
+
+CMD ["/bin/bash"]

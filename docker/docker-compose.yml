@@ -1,0 +1,41 @@
+version: "3.8"
+
+services:
+  coral-deeplab:
+    image: pytorch/pytorch:2.3.1-cuda11.8-cudnn8-runtime
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      # CUDA 메모리 관리 최적화를 위한 환경변수 추가
+      - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:512
+      # 컨테이너 내 시간대 설정
+      - TZ=Asia/Seoul
+
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    working_dir: /workspace
+
+    volumes:
+      # 볼륨 마운트 경로 충돌 수정
+      - ./:/workspace/src
+      - /mnt/d/merged_all:/workspace/data
+    
+    # 리소스 제한 추가
+    deploy:
+      resources:
+        limits:
+          memory: 16G
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+    # 재시작 정책을 제거하여 무한 재시작 방지
+    restart: no
+
+    # entrypoint.sh 대신 기본 셸 실행
+    command: ["/bin/bash"]
