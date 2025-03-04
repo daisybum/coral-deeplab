@@ -4,21 +4,22 @@ services:
   ai-training:
     build: .  # 현재 디렉터리의 Dockerfile로 이미지 빌드
     container_name: coral_deeplab_trainer  # 컨테이너 이름 (선택 사항)
+
+    command: tail -f /dev/null  # 컨테이너가 계속 실행되도록 하는 명령어
     
     environment:
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - NVIDIA_REQUIRE_CUDA="cuda>=11.8 brand=tesla,driver>=520,driver<521"
+      - NVIDIA_VISIBLE_DEVICES=all
 
     volumes:
-      - .:/workspace  # 현재 폴더를 /workspace로 마운트
-      - /mnt/d/merged_all:/mnt/d/merged_all  # 데이터셋 마운트
+      - ../:/workspace  # 현재 폴더를 /workspace로 마운트
+      - /home/shpark/workspace/merged_all:/workspace/merged_all  # 데이터셋 마운트
 
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
-              count: 4  # GPU 4개 할당
+              count: all
               capabilities: [gpu]
 
     # (선택) 포트 매핑 - 필요한 경우에만 활성화
