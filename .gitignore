@@ -163,3 +163,9 @@ cython_debug/
 .vscode/
 .idea/
 logs/
+
+# AI model and output
+checkpoints/
+output_results/
+merged_all/
+docker/coral-deeplab

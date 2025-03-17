@@ -5,10 +5,10 @@ services:
     build: .  # 현재 디렉터리의 Dockerfile로 이미지 빌드
     container_name: coral_deeplab_trainer  # 컨테이너 이름 (선택 사항)
 
-    command: tail -f /dev/null  # 컨테이너가 계속 실행되도록 하는 명령어
-    
+    command: tail -f /dev/null  # 컨테이너가 종료되지 않도록 유지
+
     environment:
-      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_VISIBLE_DEVICES=all  # 모든 GPU를 컨테이너에 노출
 
     volumes:
       - ../:/workspace  # 현재 폴더를 /workspace로 마운트
@@ -19,8 +19,8 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: all
               capabilities: [gpu]
+              device_ids: ['0']  # 사용할 GPU ID를 명시 (예: '0', '1' 등)
 
     # (선택) 포트 매핑 - 필요한 경우에만 활성화
     # ports:
