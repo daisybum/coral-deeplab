@@ -7,7 +7,7 @@ import coral_deeplab as cdl
 NUM_CLASSES = 6
 FIXED_SIZE = (513, 513)
 
-input_path = "deeplabv3_epoch01.h5"
+input_path = "deeplabv3_epoch500.h5"
 output_path = "model_quant_fixed.tflite"
 
 # 1) 모델 초기화 (input_shape 명시)
