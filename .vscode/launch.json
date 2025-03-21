@@ -1,0 +1,25 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Train DeepLabV3",
+            "type": "python",
+            "request": "launch",
+            "program": "${workspaceFolder}/train.py",
+            "console": "integratedTerminal",
+            "justMyCode": true,
+            "args": [
+                "--train_annotations", "/workspace/merged_all/train_annotations.coco.json",
+                "--train_images", "/workspace/merged_all",
+                "--val_annotations", "/workspace/merged_all/val_annotations.coco.json",
+                "--val_images", "/workspace/merged_all",
+                "--batch_size", "32",
+                "--epochs", "500",
+                "--output_dir", "checkpoints"
+            ]
+        }
+    ]
+}
