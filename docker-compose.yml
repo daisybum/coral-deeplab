@@ -11,7 +11,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all  # 모든 GPU를 컨테이너에 노출
 
     volumes:
-      - ../:/workspace  # 현재 폴더를 /workspace로 마운트
+      - ./:/workspace  # 프로젝트 루트 폴더를 /workspace로 마운트
       - /home/shpark/workspace/merged_all:/workspace/merged_all  # 데이터셋 마운트
 
     deploy:
