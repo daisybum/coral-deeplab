@@ -7,6 +7,8 @@ from ._downloads import from_precompiled
 try:
     from . import applications
     from . import layers
+    from . import attention
+    from . import fusion
 
 except ImportError:
     print(
