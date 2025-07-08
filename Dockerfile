@@ -7,12 +7,6 @@ RUN apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
 # 작업 디렉터리 생성
 WORKDIR /workspace
 
-# 모델 저장소 클론
-RUN git clone https://github.com/daisybum/coral-deeplab.git
-
-# 작업 디렉터리를 저장소로 변경
-WORKDIR /workspace/coral-deeplab
-
 # (선택) 파이썬 패키지 설치 – 저장소에 필요한 의존성 설치
 # 예: requirements.txt가 있을 경우
 # COPY requirements.txt ./ 
