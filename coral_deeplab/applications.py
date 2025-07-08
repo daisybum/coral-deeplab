@@ -3,16 +3,40 @@ from tensorflow.keras.layers import Input, Conv2DTranspose, Cropping2D, Softmax
 from coral_deeplab._blocks import deeplab_aspp_module, deeplabv3_decoder, deeplabv3plus_decoder
 from coral_deeplab._encoders import mobilenetv2
 
-def CoralDeepLabV3(input_shape=(513, 513, 3), alpha=1.0, n_classes=6):
-    inputs = Input(shape=input_shape)
-    aspp_in = mobilenetv2(inputs, alpha)
-    aspp_out = deeplab_aspp_module(aspp_in)
-    logits = deeplabv3_decoder(aspp_out, n_classes)  # [33, 33, 6]
-    return tf.keras.Model(inputs=inputs, outputs=logits, name="CoralDeepLabV3")
+def CoralDeepLabV3(
+    input_shape=(513, 513, 3),
+    alpha: float = 1.0,
+    n_classes: int = 6,
+    sensor_dim: int = 6,
+    use_cbam: bool = False,
+    sensor_ratio: float = 0.3,
+):
+    """DeepLabV3 with optional CBAM + sensor-fusion.
 
-def CoralDeepLabV3Plus(input_shape=(513, 513, 3), alpha=1.0, n_classes=6):
+    Parameters
+    ----------
+    sensor_dim : int
+        Length of the numeric sensor vector concatenated to ASPP features.
+    """
+    img_in = Input(shape=input_shape, name="image")
+    sensor_in = Input(shape=(sensor_dim,), name="sensors")
+
+    aspp_in = mobilenetv2(img_in, alpha)
+    aspp_out = deeplab_aspp_module(aspp_in, sensors=sensor_in, use_cbam=use_cbam, sensor_ratio=sensor_ratio)
+    logits = deeplabv3_decoder(aspp_out, n_classes, sensors=sensor_in, use_cbam=use_cbam, sensor_ratio=sensor_ratio)
+
+    return tf.keras.Model(inputs=[img_in, sensor_in], outputs=logits, name="CoralDeepLabV3")
+
+def CoralDeepLabV3Plus(
+    input_shape=(513, 513, 3),
+    alpha: float = 1.0,
+    n_classes: int = 6,
+    sensor_dim: int = 6,
+    use_cbam: bool = False,
+    sensor_ratio: float = 0.3,
+):
     # CoralDeepLabV3를 인코더로 사용
-    encoder = CoralDeepLabV3(input_shape, alpha)
+    encoder = CoralDeepLabV3(input_shape, alpha, n_classes, sensor_dim, use_cbam, sensor_ratio)
     encoder_last = encoder.get_layer("concat_projection/relu")  # [33, 33, 256]
     encoder_skip = encoder.get_layer("expanded_conv_3/expand/relu")  # [129, 129, 24]
     
@@ -34,5 +58,5 @@ def CoralDeepLabV3Plus(input_shape=(513, 513, 3), alpha=1.0, n_classes=6):
     # Softmax 적용으로 클래스 범위 보장
     outputs = Softmax()(logits)
     
-    model = tf.keras.Model(inputs=encoder.inputs, outputs=logits, name="CoralDeepLabV3Plus")
-    return model
+    # Ensure sensors input is part of model inputs
+    return tf.keras.Model(inputs=encoder.inputs, outputs=outputs, name="CoralDeepLabV3Plus")

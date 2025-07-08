@@ -29,6 +29,9 @@ from tensorflow.keras.layers import Conv2D
 from tensorflow.keras.layers import DepthwiseConv2D
 from tensorflow.keras.layers import Lambda
 from tensorflow.keras.layers import ReLU
+from coral_deeplab.attention import Cbam
+from coral_deeplab.fusion import SensorVisionFusion
+from typing import Optional
 
 
 L2 = 4e-5
@@ -130,7 +133,7 @@ def inverted_res_block(
     return x
 
 
-def deeplab_aspp_module(inputs: tf.Tensor) -> tf.Tensor:
+def deeplab_aspp_module(inputs: tf.Tensor, sensors: Optional[tf.Tensor] = None, use_cbam: bool = False, sensor_ratio: float = 0.3) -> tf.Tensor:
     """Implements Atrous Spatial Pyramid Pooling module.
 
     Arguments
@@ -183,11 +186,16 @@ def deeplab_aspp_module(inputs: tf.Tensor) -> tf.Tensor:
     )(x)
     x = BatchNormalization(momentum=BN_MOMENTUM, name="concat_projection/BatchNorm")(x)
     outputs = ReLU(name="concat_projection/relu")(x)
+    # Optional sensor fusion and CBAM attention
+    if sensors is not None:
+        outputs = apply_sensor_fusion(outputs, sensors, sensor_ratio)
+    if use_cbam:
+        outputs = apply_cbam(outputs)
 
     return outputs
 
 
-def deeplabv3_decoder(inputs: tf.Tensor, n_classes: int) -> tf.Tensor:
+def deeplabv3_decoder(inputs: tf.Tensor, n_classes: int, sensors: Optional[tf.Tensor] = None, use_cbam: bool = False, sensor_ratio: float = 0.3) -> tf.Tensor:
     """Implements DeepLabV3 decoder module.
 
     Arguments
@@ -205,7 +213,7 @@ def deeplabv3_decoder(inputs: tf.Tensor, n_classes: int) -> tf.Tensor:
         Output tensor.
     """
 
-    outputs = Conv2D(
+    x = Conv2D(
         n_classes,
         1,
         padding="same",
@@ -213,10 +221,16 @@ def deeplabv3_decoder(inputs: tf.Tensor, n_classes: int) -> tf.Tensor:
         name="logits/semantic",
     )(inputs)
 
-    return outputs
+    # Optional sensor fusion and CBAM attention
+    if sensors is not None:
+        x = apply_sensor_fusion(x, sensors, sensor_ratio)
+    if use_cbam:
+        x = apply_cbam(x)
+
+    return x
 
 
-def deeplabv3plus_decoder(inputs: tf.Tensor, skip_con: tf.Tensor, n_classes: int) -> tf.Tensor:
+def deeplabv3plus_decoder(inputs: tf.Tensor, skip_con: tf.Tensor, n_classes: int, sensors: Optional[tf.Tensor] = None, use_cbam: bool = False, sensor_ratio: float = 0.3) -> tf.Tensor:
     """Implements DeepLabV3Plus decoder module.
 
     Arguments
@@ -278,7 +292,7 @@ def deeplabv3plus_decoder(inputs: tf.Tensor, skip_con: tf.Tensor, n_classes: int
     x = BatchNormalization(momentum=BN_MOMENTUM, name="decoder_conv_2/BatchNorm")(x)
     x = ReLU(name="decoder_conv_2/relu")(x)
 
-    outputs = Conv2D(
+    x = Conv2D(
         n_classes,
         1,
         padding="same",
@@ -286,4 +300,37 @@ def deeplabv3plus_decoder(inputs: tf.Tensor, skip_con: tf.Tensor, n_classes: int
         name="logits/semantic",
     )(x)
 
-    return outputs
+    # Optional sensor fusion and CBAM attention
+    if sensors is not None:
+        x = apply_sensor_fusion(x, sensors, sensor_ratio)
+    if use_cbam:
+        x = apply_cbam(x)
+
+    # Return the fused/attention-enhanced logits
+    return x
+
+
+# -----------------------------------------------------------------------------
+# Helper wrappers and public exports
+# -----------------------------------------------------------------------------
+
+def apply_sensor_fusion(vision_features: tf.Tensor, sensors: tf.Tensor, sensor_ratio: float = 0.3) -> tf.Tensor:
+    """Apply SensorVisionFusion to combine sensor and vision features."""
+    channels = tf.keras.backend.int_shape(vision_features)[-1] or 256
+    return SensorVisionFusion(channels, sensor_ratio)([vision_features, sensors])
+
+
+def apply_cbam(inputs: tf.Tensor, reduction_ratio: int = 16, kernel_size: int = 7) -> tf.Tensor:
+    """Apply CBAM attention to feature maps."""
+    channels = tf.keras.backend.int_shape(inputs)[-1] or 256
+    return Cbam(channels, reduction_ratio, kernel_size)(inputs)
+
+
+__all__ = [
+    "inverted_res_block",
+    "deeplab_aspp_module",
+    "deeplabv3_decoder",
+    "deeplabv3plus_decoder",
+    "apply_sensor_fusion",
+    "apply_cbam",
+]
