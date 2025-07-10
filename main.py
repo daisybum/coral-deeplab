@@ -43,7 +43,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val_images",        default=os.path.join(cfg_mod.DATA_CFG.root_path, cfg_mod.DATA_CFG.image_base_path), type=str)
     parser.add_argument("--batch_size",        default=cfg_mod.TRAIN_DATALOADER_CFG.bathc_size,  type=int)
     parser.add_argument("--epochs",            default=cfg_mod.TRAIN_CFG.num_epoch, type=int)
-    parser.add_argument("--model",             default="deeplabv3", choices=["deeplabv3", "deeplabv3plus"])
+    parser.add_argument("--model",             default="deeplabv3plus", choices=["deeplabv3", "deeplabv3plus"],
+                        help="사용할 모델 (기본값: deeplabv3plus)")
     parser.add_argument("--n_classes",         default=cfg_mod.classes, type=int)
     parser.add_argument("--lr",                default=1e-4, type=float)
     parser.add_argument("--output",            default="checkpoints_tf", type=str)
@@ -103,29 +104,18 @@ def main(cfg: argparse.Namespace):
     val_img_tfms   = get_transforms(val_pipe_cfg)   if val_pipe_cfg   else None
 
     # ------------------------------------------------------------------
-    # Determine resize target from Resize transform (shared for img & mask)
+    # 강제 리사이즈 타깃 (모델 입력/출력 크기)
     # ------------------------------------------------------------------
-    resize_size = None
-    for t in train_pipe_cfg:
-        if t["type"] == "Resize" and "params" in t:
-            sz = t["params"].get("size")
-            if sz is not None:
-                resize_size = (sz, sz) if isinstance(sz, int) else tuple(sz)
-            break
 
-    STRIDE = 16  # Deeplab default output stride
+    TARGET_HW = (513, 513)
 
-    def _resize_mask_fn(m):
-        if resize_size is None:
-            return m
-        # Downsample mask to logits resolution (ceil resize_size / stride)
-        out_h = (resize_size[0] + STRIDE - 1) // STRIDE
-        out_w = (resize_size[1] + STRIDE - 1) // STRIDE
-        m = tf.expand_dims(m, -1)
-        m = tf.image.resize(m, (out_h, out_w), method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
-        m = tf.squeeze(m, -1)
-        return tf.cast(m, tf.int32)
+    def _resize_img(img):
+        return tf.image.resize(img, TARGET_HW, method=tf.image.ResizeMethod.BILINEAR)
 
+    def _resize_mask(mask):
+        mask = tf.expand_dims(mask, -1)
+        mask = tf.image.resize(mask, TARGET_HW, method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        return tf.squeeze(mask, -1)
 
     # ------------------------------------------------------------------
     # Build tf.data.Dataset pipelines (Albumentations disabled for now)
@@ -136,47 +126,40 @@ def main(cfg: argparse.Namespace):
     train_ds = train_ds_gen.as_dataset(batch_size=cfg.batch_size, shuffle=True)
     val_ds   = val_ds_gen.as_dataset(batch_size=cfg.batch_size, shuffle=False)
 
-    # Optional TensorFlow image transforms + drop unused fields (sensors, annots)
-    # Apply image transforms and ensure mask is resized consistently
+    # 이미지·마스크 모두 513x513 리사이즈
     train_ds = train_ds.map(
         lambda img, mask, sensors, ann: (
             (
-                train_img_tfms(img) if train_img_tfms else img,
+                _resize_img(train_img_tfms(img) if train_img_tfms else img),
                 sensors,
             ),
-            _resize_mask_fn(mask),
-        )
+            tf.cast(_resize_mask(mask), tf.int32),
+        ),
+        num_parallel_calls=tf.data.AUTOTUNE,
     )
 
     val_ds = val_ds.map(
         lambda img, mask, sensors, ann: (
             (
-                val_img_tfms(img) if val_img_tfms else img,
+                _resize_img(val_img_tfms(img) if val_img_tfms else img),
                 sensors,
             ),
-            _resize_mask_fn(mask),
-        )
+            tf.cast(_resize_mask(mask), tf.int32),
+        ),
+        num_parallel_calls=tf.data.AUTOTUNE,
     )
 
     # ------------------------------------------------------------------
     # Model / Loss / Optimizer
     # ------------------------------------------------------------------
     # Infer input shape from Resize transform (if present) so model and data align
-    resize_size = None
-    for t in train_pipe_cfg:
-        if t["type"] == "Resize" and "params" in t:
-            sz = t["params"].get("size")
-            if sz is not None:
-                if isinstance(sz, int):
-                    resize_size = (sz, sz)
-                else:
-                    resize_size = tuple(sz)
-            break
-
-    input_shape = resize_size + (3,) if resize_size else (513, 513, 3)
+    input_shape = (513, 513, 3)
 
     model = build_model(cfg.model, input_shape=input_shape, n_classes=n_classes)
-    loss  = losses.SparseCategoricalCrossentropy(from_logits=True)
+
+    # V3Plus 모델은 Softmax가 포함되어 있으므로 from_logits=False
+    loss_from_logits = cfg.model != "deeplabv3plus"
+    loss  = losses.SparseCategoricalCrossentropy(from_logits=loss_from_logits)
 
     model.compile(
         optimizer=optimizers.Adam(cfg.lr),

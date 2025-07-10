@@ -147,13 +147,65 @@ def _prepare_input(pil: Image.Image, target_hw: Tuple[int, int], input_info: Dic
     return np.expand_dims(arr, axis=0)
 
 
+# --------------------------------------------------------------------------------------
+# Visualization helpers
+# --------------------------------------------------------------------------------------
+
+
+def _overlay_mask_on_image(
+    pil_img: Image.Image,
+    mask: np.ndarray,
+    color: Tuple[int, int, int] = (255, 0, 0),
+    alpha: float = 0.5,
+) -> Image.Image:
+    """세그멘테이션 마스크를 원본 이미지 위에 반투명 색상으로 overlay.
+
+    Parameters
+    ----------
+    pil_img : PIL.Image
+        원본 RGB 이미지.
+    mask : np.ndarray
+        (H, W) 또는 (H, W, 1) 형태의 마스크. 값이 0이 아닌 픽셀을 overlay 대상으로 간주.
+    color : (R, G, B)
+        overlay 색상.
+    alpha : float
+        overlay 투명도 (0~1). 0은 완전 투명, 1은 완전 불투명.
+    """
+
+    # 마스크를 원본 크기로 리사이즈 (최근접)
+    mask_img = Image.fromarray(mask.astype(np.uint8))
+    mask_resized = mask_img.resize(pil_img.size, Image.NEAREST)
+
+    pil_arr = np.asarray(pil_img.convert("RGB"), dtype=np.uint8)
+    mask_arr = np.asarray(mask_resized, dtype=np.uint8)
+
+    # boolean mask
+    m = mask_arr > 0
+    if m.ndim == 3:
+        # 다중 클래스 argmax 결과 등 (H, W, 1) → (H, W)
+        m = m[..., 0]
+
+    overlay_arr = pil_arr.copy()
+    overlay_color = np.array(color, dtype=np.uint8)
+    overlay_arr[m] = (
+        pil_arr[m].astype(np.float32) * (1.0 - alpha) + overlay_color.astype(np.float32) * alpha
+    ).astype(np.uint8)
+
+    return Image.fromarray(overlay_arr)
+
+
 def process_image(
     image_data: bytes,
     seg_interp: Any,  # Interpreter 인스턴스
     cls_interp: Any,  # Interpreter 인스턴스 (또는 None)
     sensor_arr: np.ndarray | None = None,
 ) -> Dict[str, Any]:
-    """단일 이미지 바이트스트림을 받아 세그멘테이션 & 분류 결과 반환."""
+    """단일 이미지 바이트스트림을 받아 세그멘테이션 & 분류 결과 반환.
+
+    모델의 첫 번째 입력이 이미지인지 센서인지가 빌드 시점 옵션에 따라 달라질 수 있으므로,
+    입력 텐서들의 shape 정보를 이용해 **이미지 입력(4-D)** 과 **센서 입력(≤2-D)**을
+    자동으로 식별한다.
+    """
 
     ts0 = time.time()
 
@@ -163,24 +215,32 @@ def process_image(
         # ------------------------------
         # Segmentation
         # ------------------------------
-        seg_in = seg_interp.get_input_details()[0]
-        seg_size = (seg_in["shape"][2], seg_in["shape"][1])  # (W, H)
-        seg_arr = _prepare_input(pil, seg_size, seg_in)
-        seg_interp.set_tensor(seg_in["index"], seg_arr)
-        # 센서 입력이 모델에 정의되어 있으면 두 번째 텐서로 설정
         seg_inputs = seg_interp.get_input_details()
+
+        # 이미지 입력: 보통 shape (1, H, W, C) → len(shape) == 4
+        img_in = next((d for d in seg_inputs if len(d["shape"]) >= 3), seg_inputs[0])
+
+        # 센서 입력: 나머지 하나 (shape 길이가 2이거나 마지막 dim이 6)
+        sensor_in = None
         if len(seg_inputs) > 1:
-            sensor_in = seg_inputs[1]
+            sensor_in = next((d for d in seg_inputs if d is not img_in), None)
+
+        # 이미지 전처리 및 입력
+        seg_size = (img_in["shape"][2], img_in["shape"][1])  # (W, H)
+        seg_arr = _prepare_input(pil, seg_size, img_in)
+        seg_interp.set_tensor(img_in["index"], seg_arr)
+
+        # 센서 입력 설정 (있을 경우)
+        if sensor_in is not None:
             if sensor_arr is None:
-                # 기본값: 0 벡터
                 sensor_shape = sensor_in["shape"]
                 sensor_arr_use = np.zeros(sensor_shape, dtype=sensor_in["dtype"])
             else:
                 sensor_arr_use = sensor_arr.astype(sensor_in["dtype"])
-                # shape 맞추기 (1, N)
                 if sensor_arr_use.shape != tuple(sensor_in["shape"]):
                     sensor_arr_use = sensor_arr_use.reshape(sensor_in["shape"])
             seg_interp.set_tensor(sensor_in["index"], sensor_arr_use)
+
         seg_interp.invoke()
 
         seg_out = seg_interp.get_output_details()[0]
@@ -219,6 +279,7 @@ def process_image(
 def _build_argparser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="Coral-DeepLab TFLite 추론 스크립트")
     p.add_argument("--input", required=True, help="입력 이미지 파일 또는 디렉터리")
+    p.add_argument("--sensor_json", default=None, help="센서 정보 JSON 파일(선택)")
     p.add_argument("--seg_model", required=True, help="세그멘테이션 .tflite 경로")
     p.add_argument("--cls_model", default=None, help="분류 .tflite 경로(선택)")
     p.add_argument("--delegate", choices=["edgetpu"], default=None, help="사용 delegate")
@@ -251,11 +312,26 @@ def main():
             sensor_info = img.get("sensor_info", {})
             sensor_map[file_name] = _sensor_to_vec(sensor_info)
 
-    manual_sensor_arr = _parse_sensor_values_manual(args.sensor_values)
+    # ------------------------------------------------------------------
+    # 수동 / JSON 센서 입력 로딩
+    # ------------------------------------------------------------------
+
+    manual_sensor_arr: np.ndarray | None = None
+
+    if getattr(args, "sensor_json", None):
+        logger.info("Loading sensor JSON → %s", args.sensor_json)
+        with open(args.sensor_json, "r") as f:
+            sensor_raw = json.load(f)
+        manual_sensor_arr = _sensor_to_vec(sensor_raw)
+    else:
+        manual_sensor_arr = _parse_sensor_values_manual(getattr(args, "sensor_values", None))
 
     seg_interp = _new_interpreter(Path(args.seg_model), delegate)
     seg_interp.allocate_tensors()
-    seg_shape = seg_interp.get_input_details()[0]["shape"]
+    # 이미지 입력 텐서를 찾아서 shape 로깅
+    seg_inputs = seg_interp.get_input_details()
+    img_in = next((d for d in seg_inputs if len(d["shape"]) >= 3), seg_inputs[0])
+    seg_shape = img_in["shape"]
     logger.info("Segmentation model loaded – input %dx%d", seg_shape[2], seg_shape[1])
 
     cls_interp = None
@@ -283,8 +359,15 @@ def main():
         # 마스크 저장 옵션
         if args.save_mask:
             mask = result["mask"]
+
+            # 마스크 PNG 저장
             mask_img = Image.fromarray(mask)
             mask_img.save(out_dir / f"{img_path.stem}_mask.png")
+
+            # Overlay 이미지 저장
+            with Image.open(img_path) as orig_pil:
+                overlay_img = _overlay_mask_on_image(orig_pil, mask)
+                overlay_img.save(out_dir / f"{img_path.stem}_overlay.png")
 
         # 분류 결과 로그
         if result["cls_pred"] is not None:
