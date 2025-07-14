@@ -55,7 +55,14 @@ def _sensor_to_vec(sensor_data: dict | list | None) -> np.ndarray:
         "longitude",
         "height",
     ]
-    vec = [float(sensor_data.get(k, 0.0)) for k in keys]
+    vec = np.asarray([float(sensor_data.get(k, 0.0)) for k in keys], dtype=np.float32)
+
+    # 0~255 스케일로 정규화 (학습·TFLite와 동일)
+    mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
+    maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
+    vec = np.clip(vec, mins, maxs)
+    vec = (vec - mins) * 255.0 / (maxs - mins)
+
     return np.asarray([vec], dtype=np.float32)
 
 
@@ -65,6 +72,16 @@ def _parse_sensor_values_manual(s: str | None) -> np.ndarray | None:
     vals = [float(v.strip()) for v in s.split(",")]
     return np.asarray([vals], dtype=np.float32)
 
+# --------------------------------------------------------------------------------------
+# Vector scaling helper (for manual input arrays)
+# --------------------------------------------------------------------------------------
+
+def _scale_sensor_vec(vec: np.ndarray) -> np.ndarray:
+    mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
+    maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
+    vec = np.clip(vec, mins, maxs)
+    vec = (vec - mins) * 255.0 / (maxs - mins)
+    return vec.astype(np.float32)
 
 # --------------------------------------------------------------------------------------
 # Image helpers
@@ -161,7 +178,8 @@ def main():
             sensor_raw = json.load(f)
         global_sensor_arr = _sensor_to_vec(sensor_raw)
     else:
-        global_sensor_arr = _parse_sensor_values_manual(args.sensor_values) or np.zeros((1, 6), dtype=np.float32)
+        manual = _parse_sensor_values_manual(args.sensor_values) or np.zeros((1, 6), dtype=np.float32)
+        global_sensor_arr = _scale_sensor_vec(manual)
 
     # ------------------------------------------------------------------
     # 모델 로드
@@ -222,7 +240,7 @@ def main():
         else:
             sensor_arr_use = global_sensor_arr
 
-        # 모델 예측
+        # 모델 예측 (센서 이미 0~255 float32)
         preds = model.predict([inp_arr, sensor_arr_use], verbose=0)[0]  # (H, W, C)
 
         # 후처리: argmax → (H, W)

@@ -24,7 +24,7 @@ NUM_CLASSES: int = 6      # 세그멘테이션 클래스 수
 SENSOR_DIM: int = 6       # 센서 벡터 길이 (데이터셋과 동일하게 맞추세요)
 FIXED_SIZE = (513, 513)   # 입력 이미지 해상도 `(H, W)
 
-INPUT_PATH = "checkpoints_tf/epoch_110.keras"  # 학습된 Keras 가중치
+INPUT_PATH = "checkpoints_tf/epoch_321.keras"  # 학습된 Keras 가중치
 OUTPUT_PATH = "seg_model_sensor_int8.tflite"  # 변환 후 저장 파일
 
 # --------------------------------------------------------------------------------------
@@ -67,15 +67,18 @@ converter.optimizations = [tf.lite.Optimize.DEFAULT]
 # 대표 데이터셋: 무작위 샘플(또는 실제 샘플)로 스케일 보정
 
 def representative_dataset():
-    """Generator yielding dict that maps **input layer names** to sample tensors.
+    """Generator yielding calibration samples in **0 ~ 255 float32** range.
 
-    TFLite quantizer is sensitive to input ordering; using a dict ensures each
-    sample is fed to the correct placeholder ("image" vs "sensors").
+    We scale random data to mimic training/inference distribution where image
+    pixels and sensor values are already mapped to 0–255 before uint8 casting.
+    Using float32 keeps the converter happy while providing correct scale.
     """
-    for _ in range(250):
+    for _ in range(1000):
         yield {
+            # 이미지: 0~1 범위 → scale ≈ 1/255 학습
             "image": np.random.rand(1, *FIXED_SIZE, 3).astype(np.float32),
-            "sensors": np.random.rand(1, SENSOR_DIM).astype(np.float32),
+            # 센서: 0~255 범위 유지 (scale ≈ 1.0)
+            "sensors": (np.random.rand(1, SENSOR_DIM).astype(np.float32) * 255.0),
         }
 
 converter.representative_dataset = representative_dataset

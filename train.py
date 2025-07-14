@@ -17,20 +17,20 @@ import tensorflow as tf
 # *train.py* 는 모델 학습/평가 스크립트(main.py)에서 import 되므로,
 # 이 블록을 모듈 로드 시점에 실행하면 자연스럽게 GPU 메모리 사용량을 제한할 수 있다.
 
-try:
-    _gpus = tf.config.list_physical_devices("GPU")
-    if _gpus:
-        tf.config.experimental.set_virtual_device_configuration(
-            _gpus[0],
-            [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=8192)],
-        )
-        # 메모리 성능 최적화: 필요 시 growth 옵션 대신 정적 할당 사용 중.
-        print("[INFO] GPU 메모리 제한: 8GB (8192MB) 적용 완료")
-except RuntimeError as _e:
-    # set_virtual_device_configuration() 은 물리적 장치를 초기화하기 전에만 호출 가능
-    print(f"[WARN] GPU 메모리 제한 설정 실패: {_e}")
+# try:
+#     _gpus = tf.config.list_physical_devices("GPU")
+#     if _gpus:
+#         tf.config.experimental.set_virtual_device_configuration(
+#             _gpus[0],
+#             [tf.config.experimental.VirtualDeviceConfiguration(memory_limit=8192)],
+#         )
+#         # 메모리 성능 최적화: 필요 시 growth 옵션 대신 정적 할당 사용 중.
+#         print("[INFO] GPU 메모리 제한: 8GB (8192MB) 적용 완료")
+# except RuntimeError as _e:
+#     # set_virtual_device_configuration() 은 물리적 장치를 초기화하기 전에만 호출 가능
+#     print(f"[WARN] GPU 메모리 제한 설정 실패: {_e}")
 
-__all__ = ["MeanIoUWithArgmax"]
+# __all__ = ["MeanIoUWithArgmax"]
 
 
 class MeanIoUWithArgmax(tf.keras.metrics.MeanIoU):

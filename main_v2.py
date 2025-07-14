@@ -48,7 +48,7 @@ def parse_args() -> argparse.Namespace:
                         help="사용할 모델 (기본값: deeplabv3plus)")
     parser.add_argument("--n_classes",         default=cfg_mod.classes, type=int)
     parser.add_argument("--lr",                default=1e-4, type=float)
-    parser.add_argument("--output",            default="checkpoints", type=str)
+    parser.add_argument("--output",            default="checkpoints_tf", type=str)
     parser.add_argument("--resume",            default=None, type=str, help="이어서 학습할 체크포인트(.keras) 경로")
     # Optional transforms pipelines as JSON string (list of dicts)
     parser.add_argument("--train_pipeline",    default=json.dumps(cfg_mod.TRAIN_PIPE), type=str)
