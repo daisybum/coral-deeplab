@@ -154,6 +154,16 @@ bash compiler/compiler.sh seg_model_int8.tflite
 # → seg_model_int8_edgetpu.tflite
 ```
 
+### 대표 데이터셋 스케일 주의
+> **대표 데이터셋 스케일 주의**  
+>   • **이미지**: `rand()  →  0 ~ 1` *(변환기에서 scale≈1/255 추정)*  
+>   • **센서**  : `rand()*255 → 0 ~ 255` *(scale≈1 추정)*  
+>   이렇게 구성해야 완전 정수 양자화 모델이 이미지/센서 각각에 맞는 scale 값을 저장합니다. 0 ~ 255 `uint8` 이미지를 그대로 넣어도 `(val−0)×1/255` 로 0 ~ 1 로 복원되어 Keras 결과와 거의 동일해집니다.
+
+### CPU 기본 실행 및 TPU 선택적 사용
+* 변환·양자화 과정은 **CPU** 만으로 수행됩니다. CUDA / GPU가 없어도 문제 없습니다.
+* 추론 역시 기본적으로 **CPU(XNNPACK delegate)** 경로를 사용하며, `--delegate edgetpu` 플래그를 줘야만 Edge-TPU 가속이 활성화됩니다.
+
 ---
 ## 추론
 ### Keras 체크포인트
@@ -171,6 +181,18 @@ python inference.py \
   --seg_model seg_model_int8_edgetpu.tflite \
   --delegate edgetpu --save_mask
 ```
+
+---
+## 테스트 세트 성능
+
+다음 표는 *test* split 전체에 대해 `test_with_keras.py` 및 `test_with_int8.py` 로 측정한 주요 지표입니다.
+
+| 모델 | Pixel Accuracy | Mean IoU | Mean Dice | Frequency-Weighted IoU |
+|------|---------------|----------|-----------|------------------------|
+| **Keras (float32)** | **0.9302** | **0.7922** | **0.8809** | **0.8760** |
+| **TFLite INT8** | 0.9271 | 0.7843 | 0.8757 | 0.8712 |
+
+> *참고*: Keras 모델 대비 INT8 TFLite 모델은 양자화 손실로 인해 mIoU 약 **0.8pt** 정도, Pixel Accuracy 약 **0.3pt** 감소했지만, 전반적으로 유사한 성능을 유지합니다. Edge-TPU delegate 사용 시 최대 **x10** 배의 추론 속도 향상을 기대할 수 있습니다.
 
 ---
 ## 참고 문헌
