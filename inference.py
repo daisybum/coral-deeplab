@@ -68,8 +68,26 @@ def _sensor_to_vec(sensor_data: dict | list | None) -> np.ndarray:
         "longitude",
         "height",
     ]
-    vec = [float(sensor_data.get(k, 0.0)) for k in keys]
+    vec = np.asarray([float(sensor_data.get(k, 0.0)) for k in keys], dtype=np.float32)
+
+    # 학습·양자화와 동일한 0~255 스케일 정규화
+    mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
+    maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
+    vec = np.clip(vec, mins, maxs)
+    vec = (vec - mins) * 255.0 / (maxs - mins)
+
     return np.asarray([vec], dtype=np.float32)
+
+# --------------------------------------------------------------------------------------
+# Helper to scale manual sensor value arrays (from --sensor_values)
+# --------------------------------------------------------------------------------------
+
+def _scale_sensor_vec(vec: np.ndarray) -> np.ndarray:
+    mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
+    maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
+    vec = np.clip(vec, mins, maxs)
+    vec = (vec - mins) * 255.0 / (maxs - mins)
+    return vec.astype(np.float32)
 
 # 수동 입력(쉼표 문자열) 파싱 → 학습 json이 없는 경우 fallback 용도
 def _parse_sensor_values_manual(s: str | None) -> np.ndarray | None:
@@ -228,17 +246,22 @@ def process_image(
         # 이미지 전처리 및 입력
         seg_size = (img_in["shape"][2], img_in["shape"][1])  # (W, H)
         seg_arr = _prepare_input(pil, seg_size, img_in)
+
         seg_interp.set_tensor(img_in["index"], seg_arr)
 
         # 센서 입력 설정 (있을 경우)
         if sensor_in is not None:
             if sensor_arr is None:
                 sensor_shape = sensor_in["shape"]
-                sensor_arr_use = np.zeros(sensor_shape, dtype=sensor_in["dtype"])
+                sensor_arr_use = np.zeros(sensor_shape, dtype=np.float32)
             else:
-                sensor_arr_use = sensor_arr.astype(sensor_in["dtype"])
+                sensor_arr_use = sensor_arr.astype(np.float32)
                 if sensor_arr_use.shape != tuple(sensor_in["shape"]):
                     sensor_arr_use = sensor_arr_use.reshape(sensor_in["shape"])
+
+            # 센서 텐서를 인터프리터 기대 dtype으로 캐스팅 (uint8)
+            sensor_arr_use = sensor_arr_use.astype(sensor_in["dtype"])
+
             seg_interp.set_tensor(sensor_in["index"], sensor_arr_use)
 
         seg_interp.invoke()
@@ -324,7 +347,9 @@ def main():
             sensor_raw = json.load(f)
         manual_sensor_arr = _sensor_to_vec(sensor_raw)
     else:
-        manual_sensor_arr = _parse_sensor_values_manual(getattr(args, "sensor_values", None))
+        raw_manual = _parse_sensor_values_manual(getattr(args, "sensor_values", None))
+        if raw_manual is not None:
+            manual_sensor_arr = _scale_sensor_vec(raw_manual)
 
     seg_interp = _new_interpreter(Path(args.seg_model), delegate)
     seg_interp.allocate_tensors()

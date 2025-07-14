@@ -159,8 +159,23 @@ class ImgClsDatasetTF:
                 "longitude",
                 "height",
             ]
-            vec = [float(s.get(k, 0.0)) for k in keys]
-            return np.asarray(vec, dtype=np.float32)
+            vec = np.asarray([float(s.get(k, 0.0)) for k in keys], dtype=np.float32)
+
+            # --------------------------------------------------------------
+            # 0~255 정규화 (학습·추론 스케일과 동일하게 맞춤)
+            # objectTemp 범위 : -100~100 ℃
+            # humi           :   0~100 %
+            # pressure       : 950~1050 hPa
+            # latitude       : -90~90
+            # longitude      : -180~180
+            # height         : 0~1000 m
+            # --------------------------------------------------------------
+            mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
+            maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
+            vec = np.clip(vec, mins, maxs)
+            vec = (vec - mins) * 255.0 / (maxs - mins)
+
+            return vec.astype(np.float32)
 
         sensor_vec = _sensor_to_vec(sensors_raw)
 
