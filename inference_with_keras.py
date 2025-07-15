@@ -55,14 +55,7 @@ def _sensor_to_vec(sensor_data: dict | list | None) -> np.ndarray:
         "longitude",
         "height",
     ]
-    vec = np.asarray([float(sensor_data.get(k, 0.0)) for k in keys], dtype=np.float32)
-
-    # 0~255 스케일로 정규화 (학습·TFLite와 동일)
-    mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
-    maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
-    vec = np.clip(vec, mins, maxs)
-    vec = (vec - mins) * 255.0 / (maxs - mins)
-
+    vec = [float(sensor_data.get(k, 0.0)) for k in keys]
     return np.asarray([vec], dtype=np.float32)
 
 
@@ -73,15 +66,17 @@ def _parse_sensor_values_manual(s: str | None) -> np.ndarray | None:
     return np.asarray([vals], dtype=np.float32)
 
 # --------------------------------------------------------------------------------------
-# Vector scaling helper (for manual input arrays)
+# Sensor quantisation helper (match training pipeline)
 # --------------------------------------------------------------------------------------
 
-def _scale_sensor_vec(vec: np.ndarray) -> np.ndarray:
+def _quantize_sensor(vec: np.ndarray) -> np.ndarray:
+    """클립+스케일 → 0~255 float32 로 변환 (모델 입력 기대치)."""
     mins = np.asarray([-100, 0, 950, -90, -180, 0], dtype=np.float32)
     maxs = np.asarray([100, 100, 1050, 90, 180, 1000], dtype=np.float32)
-    vec = np.clip(vec, mins, maxs)
-    vec = (vec - mins) * 255.0 / (maxs - mins)
-    return vec.astype(np.float32)
+    clipped = np.clip(vec, mins, maxs)
+    scaled = (clipped - mins) * 255.0 / (maxs - mins)
+    return scaled.astype(np.float32)
+
 
 # --------------------------------------------------------------------------------------
 # Image helpers
@@ -178,8 +173,7 @@ def main():
             sensor_raw = json.load(f)
         global_sensor_arr = _sensor_to_vec(sensor_raw)
     else:
-        manual = _parse_sensor_values_manual(args.sensor_values) or np.zeros((1, 6), dtype=np.float32)
-        global_sensor_arr = _scale_sensor_vec(manual)
+        global_sensor_arr = _parse_sensor_values_manual(args.sensor_values) or np.zeros((1, 6), dtype=np.float32)
 
     # ------------------------------------------------------------------
     # 모델 로드
@@ -240,8 +234,11 @@ def main():
         else:
             sensor_arr_use = global_sensor_arr
 
-        # 모델 예측 (센서 이미 0~255 float32)
-        preds = model.predict([inp_arr, sensor_arr_use], verbose=0)[0]  # (H, W, C)
+        # 센서 벡터 0~255 스케일링
+        sensor_arr_use_q = _quantize_sensor(sensor_arr_use)
+
+        # 모델 예측
+        preds = model.predict([inp_arr, sensor_arr_use_q], verbose=0)[0]  # (H, W, C)
 
         # 후처리: argmax → (H, W)
         mask = np.argmax(preds, axis=-1).astype(np.uint8)
