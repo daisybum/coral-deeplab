@@ -32,11 +32,12 @@ DATA_ROOT = Path("/workspace/data")
 IMAGE_DIR = DATA_ROOT / "images"
 ANNO_PATH = DATA_ROOT / "COCO" / "test_without_street.json"
 MODEL_PATH = Path("seg_model_sensor_int8.tflite")
-NUM_THREADS = int(os.getenv("NUM_THREADS", "4"))
+NUM_THREADS = int(os.getenv("NUM_THREADS", "16"))
 
 # --------------------------------------------------------------------------------------
 # Sensor helper (0~255 scaling)
 # --------------------------------------------------------------------------------------
+
 
 MINS = np.asarray([-100, 0, 950, -90, -180, 0], np.float32)
 MAXS = np.asarray([100, 100, 1050, 90, 180, 1000], np.float32)
@@ -50,16 +51,46 @@ KEYS = [
     "height",
 ]
 
+
 def sensor_to_vec(info: Dict[str, Any] | None) -> np.ndarray:
+    """Convert sensor dict/list into 0 – 255 float32 vector (length=6)."""
+
     if not info:
         vec = np.zeros(6, np.float32)
     else:
         if isinstance(info, list):
             info = info[0] if info else {}
         vec = np.asarray([float(info.get(k, 0.0)) for k in KEYS], np.float32)
+
     vec = np.clip(vec, MINS, MAXS)
     vec = (vec - MINS) * 255.0 / (MAXS - MINS)
     return vec.astype(np.float32)
+
+# -----------------------------------------------------------------------------
+# Polygon → mask rasterizer (stand-alone copy from ImgClsDatasetTF)
+# -----------------------------------------------------------------------------
+
+
+def get_mask_from_polygon(img_shape: Tuple[int, int], num_categories: int, annotations: list[Dict]) -> np.ndarray:  # type: ignore[valid-type]
+    """Rasterise polygon annotations to an H×W integer mask.
+
+    Each *annotation* must contain ``category_id`` and ``segmentation`` (list of
+    polygons).  Pixels hold the category id (0 … N-1). Background == 0.
+    """
+
+    height, width = img_shape
+    mask = np.zeros((height, width), dtype=np.uint8)
+
+    for ann in annotations:
+        cid = ann.get("category_id", 0)
+        segm = ann.get("segmentation", [])
+        if not isinstance(segm, list):
+            # Unsupported RLE segmentation – skip
+            continue
+        for poly in segm:
+            pts = np.asarray(poly, dtype=np.int32).reshape(-1, 2)
+            cv2.fillPoly(mask, [pts], cid)
+    return mask.astype(np.uint8)
 
 # --------------------------------------------------------------------------------------
 # Metrics helpers
@@ -106,6 +137,9 @@ def main():
     for ann in anno_raw["annotations"]:
         imgid_to_ann.setdefault(ann["image_id"], []).append(ann)
 
+    # Only evaluate images that have annotations (align with ImgClsDatasetTF)
+    eval_ids = [i for i in id2info.keys() if i in imgid_to_ann]
+
     n_classes = max(cat["id"] for cat in anno_raw["categories"]) + 1
     cm = np.zeros((n_classes, n_classes), np.int64)
 
@@ -118,33 +152,44 @@ def main():
     target_hw: Tuple[int, int] = (img_in["shape"][2], img_in["shape"][1])
 
     # Evaluation loop
-    for img_id, img_info in tqdm(id2info.items(), desc="Evaluating"):
+    for img_id in tqdm(eval_ids, desc="Evaluating"):
+        img_info = id2info[img_id]
         img_path = IMAGE_DIR / img_info["file_name"]
         if not img_path.exists():
             continue
-        # Load image
         img_bgr = cv2.imread(str(img_path), cv2.IMREAD_COLOR)
-        img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
-        img_rgb = cv2.resize(img_rgb, target_hw, interpolation=cv2.INTER_LINEAR)
-        img_float = img_rgb.astype(np.float32) / 255.0  # 0~1
+        img_rgb_orig = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
+        orig_h, orig_w = img_rgb_orig.shape[:2]  # 저장해 두기 (폴리곤 좌표계)
 
-        # Build GT mask
-        anns = imgid_to_ann.get(img_id, [])
-        mask = np.zeros(target_hw[::-1], np.uint8)
-        for ann in anns:
-            cid = ann["category_id"]
-            for poly in ann["segmentation"]:
-                pts = np.asarray(poly, np.int32).reshape(-1, 2)
-                cv2.fillPoly(mask, [pts], cid)
+        # Build GT mask (original resolution → input size)
+        anns = imgid_to_ann[img_id]
+        mask_full = get_mask_from_polygon((orig_h, orig_w), n_classes, anns)
+        mask_tf = tf.convert_to_tensor(mask_full[..., None])  # add channel dim
+        mask_tf = tf.image.resize(mask_tf, target_hw[::-1], method=tf.image.ResizeMethod.NEAREST_NEIGHBOR)
+        mask = tf.squeeze(mask_tf, -1).numpy().astype(np.uint8)
+
+        # Resize image for model using Bilinear (align with tf pipeline)
+        img_tf = tf.convert_to_tensor(img_rgb_orig, dtype=tf.float32)  # H W 3, 0-255
+        img_tf = img_tf / 255.0  # 0-1 float32
+        img_tf = tf.image.resize(img_tf, target_hw[::-1], method=tf.image.ResizeMethod.BILINEAR)
+        img_float = img_tf.numpy()
 
         # Sensor vector
         sensor_vec = sensor_to_vec(img_info.get("sensor_info"))
 
         # Prepare tensors
-        img_uint8 = (img_float * 255.0).round().astype(np.uint8)[None, ...]
-        sensor_uint8 = np.round(sensor_vec).astype(np.uint8)[None, ...]
-        interp.set_tensor(img_in["index"], img_uint8)
-        interp.set_tensor(sensor_in["index"], sensor_uint8)
+        if img_in["dtype"] == np.uint8:
+            img_tensor = (img_float * 255.0).round().astype(np.uint8)[None, ...]
+        else:  # float32
+            img_tensor = img_float[None, ...].astype(np.float32)
+
+        if sensor_in["dtype"] == np.uint8:
+            sensor_tensor = np.round(sensor_vec).astype(np.uint8)[None, ...]
+        else:  # float32
+            sensor_tensor = sensor_vec[None, ...].astype(np.float32)
+
+        interp.set_tensor(img_in["index"], img_tensor)
+        interp.set_tensor(sensor_in["index"], sensor_tensor)
         interp.invoke()
         pred = interp.get_tensor(output_detail["index"])[0]
         pred_cls = np.argmax(pred, axis=-1).astype(np.int32)
